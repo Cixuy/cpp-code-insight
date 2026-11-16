@@ -96,22 +96,43 @@ g++ -std=c++17 -O2 -static -Iinclude src/*.cpp -o build/code-insight.exe -lws2_3
 
 脚本用一个长连接连发 2000 个 `/scan` 请求，输出 QPS 与 P50/P99。换成 `wrk -t4 -c200 -d10s --latency` 可以测并发连接下的表现。
 
+## 运行效果
+
+以下为命令的实际输出（终端渲染）：
+
+<img src="docs/screenshots/api.png" width="92%">
+
+`/scan` 返回结构化结果：行数、嵌套深度、圈复杂度，以及命中问题的行号与级别。
+
+<img src="docs/screenshots/bench.png" width="92%">
+
+同一份代码在两个平台各压一次，单连接 2000 次请求。
+
 ## 性能
 
-单连接 keep-alive 连续请求，本机回环（WSL2 Ubuntu 22.04，g++ 11.2 -O2），2000 次 `/scan` 请求：
+单连接 keep-alive 连续请求，2000 次 `/scan`，同一份代码、同一台机器，两个平台各跑一次：
 
-```
+```text
+WSL2 Ubuntu 22.04 / g++ 11.2 -O2
 requests : 2000
 elapsed  : 0.248s
 qps      : 8070
-latency  : p50=0.12ms  p99=0.17ms  mean=0.12ms
+latency  : p50=0.12ms  p99=0.17ms
+
+Windows 11 / MinGW g++ 静态编译
+requests : 2000
+elapsed  : 0.373s
+qps      : 5366
+latency  : p50=0.19ms  p99=0.24ms
 ```
 
-说明几个前提，避免误读这个数字：
+差 50% 主要来自网络栈：Windows 的 loopback 与 socket 实现开销更高，同一份代码在 Linux 上更快。这也说明**报性能数字必须带上环境**，否则没有可比性。
+
+说明几个前提，避免误读：
 
 - 这是**单连接串行**的成绩，测的是"单个请求处理有多快"，不是并发吞吐
-- 请求体是 6 行的短文件，正则逐行匹配的开销小；代码越长、规则越多，耗时会线性增长
-- 瓶颈主要在正则匹配，不在网络层——把连接换成并发后 QPS 会明显下降
+- 请求体是 10 行的短文件，正则逐行匹配的开销小；代码越长、规则越多，耗时会线性增长
+- 瓶颈主要在正则匹配，不在网络层——换成并发后 QPS 会明显下降
 
 并发场景用 wrk 另测：
 
