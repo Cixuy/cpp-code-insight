@@ -88,6 +88,35 @@ cmake -B build && cmake --build build -j
 g++ -std=c++17 -O2 -static -Iinclude src/*.cpp -o build/code-insight.exe -lws2_32
 ```
 
+## 命令行单文件扫描（不起服务）
+
+CI 里往往只想"扫一个文件、拿到结果、按条数决定过不过"，起个 HTTP 服务再调接口太重。所以加了一个直接扫描模式：
+
+```bash
+./code-insight --scan src/http.cpp            # 人看的摘要
+./code-insight --scan src/main.cpp --json     # 机读，接 CI
+# {"file":"src/main.cpp","language":"cpp","lines":184,"codeLines":150,...,"critical":0,"warning":0,"issues":[]}
+```
+
+**退出码 = critical + warning 的条数**（封顶 125，避免被 shell 截断成 0），所以可以直接写进流水线：
+
+```bash
+if ! ./code-insight --scan src/foo.cpp --json > report.json; then
+  echo "有告警，按 report.json 处理"; fi
+```
+
+同一个 `scan()` 函数既供 HTTP 接口用也供命令行用，不存在两份逻辑：
+
+```
+$ ./code-insight --scan /tmp/bad2.cpp
+行数 7（代码 6 / 注释 1）  最大嵌套 1  圈复杂度 1  TODO 0
+问题 2 条：critical 1 / warning 1
+  [critical] SECRET_HARDCODED:4  疑似硬编码凭据，应改为环境变量或配置中心
+  [warning ] C_DANGEROUS_FUNC:5  使用了不安全的 C 字符串函数，建议改用带长度限制的版本
+$ echo $?
+2
+```
+
 ## 压测
 
 ```bash
