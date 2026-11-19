@@ -96,7 +96,11 @@ CI 里往往只想"扫一个文件、拿到结果、按条数决定过不过"，
 ./code-insight --scan src/http.cpp            # 人看的摘要
 ./code-insight --scan src/main.cpp --json     # 机读，接 CI
 # {"file":"src/main.cpp","language":"cpp","lines":184,"codeLines":150,...,"critical":0,"warning":0,"issues":[]}
+./code-insight --scan                        # 参数缺失：报用法并以 2 退出，不会退化成起服务
 ```
+
+`--scan` 后面必须跟文件路径。路径缺失或为空串时直接 `error: --scan 需要文件路径` 并退出 2——
+这样脚本里 `--scan $FILE` 的变量没赋值时能立刻失败，而不是静默落回服务模式把一个前台进程挂在 CI 里。
 
 **退出码 = critical + warning 的条数**（封顶 125，避免被 shell 截断成 0），所以可以直接写进流水线：
 
