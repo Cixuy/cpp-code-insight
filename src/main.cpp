@@ -82,13 +82,22 @@ static int scanOneFile(const std::string& path, bool json) {
 int main(int argc, char** argv) {
     int port = 18080;
     std::string scanPath;
+    bool scanRequested = false;
     bool json = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if ((arg == "--port" || arg == "-p") && i + 1 < argc) {
             port = std::atoi(argv[++i]);
-        } else if ((arg == "--scan" || arg == "-s") && i + 1 < argc) {
+        } else if (arg == "--scan" || arg == "-s") {
+            // 少了文件参数就报错退出：旧行为是静默落回"起服务"，
+            // 脚本里 `--scan $FILE` 的变量为空时会挂成一个前台进程，CI 直接卡死
+            if (i + 1 >= argc || argv[i + 1][0] == '\0') {
+                std::fprintf(stderr, "error: --scan 需要文件路径\n");
+                std::fprintf(stderr, "usage: code-insight --scan <file> [--json]\n");
+                return 2;
+            }
             scanPath = argv[++i];
+            scanRequested = true;
         } else if (arg == "--json") {
             json = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -98,7 +107,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (!scanPath.empty()) return scanOneFile(scanPath, json);
+    if (scanRequested) return scanOneFile(scanPath, json);
 
 #ifdef _WIN32
     WSADATA wsa{};
