@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -79,9 +80,67 @@ static int scanOneFile(const std::string& path, bool json) {
     return critical + warning > 125 ? 125 : critical + warning;
 }
 
+// 目录批量扫描：CI 里真正的用法不是扫单个文件，而是扫整个仓。
+// 按扩展名过滤，递归走完，最后给一张"文件数 / 问题数"汇总表，退码=问题总数（封顶 125）。
+static int scanDir(const std::string& root, bool json) {
+    namespace fs = std::filesystem;
+    if (!fs::exists(root) || !fs::is_directory(root)) {
+        std::fprintf(stderr, "error: %s 不是目录\n", root.c_str());
+        return 2;
+    }
+    static const char* exts[] = {".c", ".cc", ".cpp", ".h", ".hpp", ".java", ".py", ".js", ".ts", ".go"};
+    int files = 0, critical = 0, warning = 0, lines = 0, skipped = 0;
+    std::vector<std::pair<std::string, std::pair<int, int>>> perFile;  // 文件 -> (critical, warning)
+
+    for (const auto& e : fs::recursive_directory_iterator(root)) {
+        if (!e.is_regular_file()) continue;
+        std::string ext = e.path().extension().string();
+        bool hit = false;
+        for (const char* x : exts) if (ext == x) { hit = true; break; }
+        if (!hit) continue;
+        std::ifstream in(e.path(), std::ios::binary);
+        if (!in) { ++skipped; continue; }
+        std::stringstream ss;
+        ss << in.rdbuf();
+        ci::ScanResult r = ci::scan(e.path().string(), ss.str());
+        int c = 0, w = 0;
+        for (const auto& is : r.issues) {
+            if (is.severity == "critical") ++c;
+            else if (is.severity == "warning") ++w;
+        }
+        ++files;
+        lines += r.total_lines;
+        critical += c;
+        warning += w;
+        if (c || w) perFile.push_back({e.path().string(), {c, w}});
+    }
+
+    if (json) {
+        std::printf("{\"root\":\"%s\",\"files\":%d,\"lines\":%d,\"critical\":%d,\"warning\":%d,\"skipped\":%d,\"offenders\":[",
+                    jsonEscape(root).c_str(), files, lines, critical, warning, skipped);
+        for (size_t i = 0; i < perFile.size(); ++i)
+            std::printf("%s{\"file\":\"%s\",\"critical\":%d,\"warning\":%d}", i ? "," : "",
+                        jsonEscape(perFile[i].first).c_str(), perFile[i].second.first, perFile[i].second.second);
+        std::printf("]}\n");
+    } else {
+        std::printf("扫描目录 %s\n", root.c_str());
+        std::printf("  文件 %d 个，%d 行；跳过无法打开 %d 个\n", files, lines, skipped);
+        std::printf("  问题：critical %d / warning %d\n", critical, warning);
+        if (!perFile.empty()) {
+            std::printf("  有问题的文件：\n");
+            for (size_t i = 0; i < perFile.size() && i < 30; ++i)
+                std::printf("    %-52s critical %d / warning %d\n", perFile[i].first.c_str(),
+                            perFile[i].second.first, perFile[i].second.second);
+            if (perFile.size() > 30) std::printf("    …… 另有 %zu 个\n", perFile.size() - 30);
+        }
+    }
+    int total = critical + warning;
+    return total > 125 ? 125 : total;
+}
+
 int main(int argc, char** argv) {
     int port = 18080;
-    std::string scanPath;
+    std::string scanPath, scanDirPath;
     bool scanRequested = false;
     bool json = false;
     for (int i = 1; i < argc; ++i) {
@@ -98,15 +157,19 @@ int main(int argc, char** argv) {
             }
             scanPath = argv[++i];
             scanRequested = true;
+        } else if (arg == "--scan-dir" && i + 1 < argc) {
+            scanDirPath = argv[++i];
         } else if (arg == "--json") {
             json = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("usage: code-insight [--port N]\n"
-                        "       code-insight --scan <file> [--json]   # 单文件扫描，不起服务\n");
+                        "       code-insight --scan <file> [--json]        # 单文件扫描，不起服务\n"
+                        "       code-insight --scan-dir <dir> [--json]     # 递归扫目录，汇总问题数\n");
             return 0;
         }
     }
 
+    if (!scanDirPath.empty()) return scanDir(scanDirPath, json);
     if (scanRequested) return scanOneFile(scanPath, json);
 
 #ifdef _WIN32

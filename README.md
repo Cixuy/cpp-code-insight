@@ -121,6 +121,31 @@ $ echo $?
 2
 ```
 
+### 扫整个目录
+
+单文件扫描只够看一个文件，CI 里要的是「这个仓有多少问题」。所以还有目录模式：
+
+```bash
+./code-insight --scan-dir src            # 递归扫，按扩展名过滤
+./code-insight --scan-dir . --json       # 机读，退码=问题总数
+```
+
+```
+扫描目录 .
+  文件 12 个，971 行；跳过无法打开 0 个
+  问题：critical 0 / warning 0
+```
+
+会递归遍历目录，只认 `.c/.cc/.cpp/.h/.hpp/.java/.py/.js/.ts/.go` 这些扩展名，
+汇总文件数、总行数、critical/warning 数，并列出"有问题的文件"（最多 30 个，超出只报数量）。
+**退码 = critical + warning**（封顶 125），所以直接写进流水线：
+
+```bash
+./code-insight --scan-dir src || echo "有告警，见输出"
+```
+
+扫描自身是干净的（12 个文件 971 行，0 条），这也是这个小工具能自己检查自己的原因。
+
 ## 压测
 
 ```bash
