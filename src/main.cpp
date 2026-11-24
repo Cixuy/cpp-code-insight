@@ -146,7 +146,16 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if ((arg == "--port" || arg == "-p") && i + 1 < argc) {
-            port = std::atoi(argv[++i]);
+            // atoi 对 "abc"/"70000"/"" 一律给 0 或截断，端口 0 会随手绑一个随机端口，
+            // 脚本再按 --port 去连就连不上，所以范围也一起校验
+            const char* s = argv[++i];
+            char* end = nullptr;
+            long p = std::strtol(s, &end, 10);
+            if (end == s || *end != '\0' || p < 1 || p > 65535) {
+                std::fprintf(stderr, "error: --port 需要 1..65535 之间的整数（当前 \"%s\"）\n", s);
+                return 2;
+            }
+            port = (int)p;
         } else if (arg == "--scan" || arg == "-s") {
             // 少了文件参数就报错退出：旧行为是静默落回"起服务"，
             // 脚本里 `--scan $FILE` 的变量为空时会挂成一个前台进程，CI 直接卡死
@@ -157,7 +166,13 @@ int main(int argc, char** argv) {
             }
             scanPath = argv[++i];
             scanRequested = true;
-        } else if (arg == "--scan-dir" && i + 1 < argc) {
+        } else if (arg == "--scan-dir") {
+            // 同上：`--scan-dir $DIR` 变量为空时会静默起服务，CI 里表现为"扫描没结果、进程不退出"
+            if (i + 1 >= argc || argv[i + 1][0] == '\0') {
+                std::fprintf(stderr, "error: --scan-dir 需要目录路径\n");
+                std::fprintf(stderr, "usage: code-insight --scan-dir <dir> [--json]\n");
+                return 2;
+            }
             scanDirPath = argv[++i];
         } else if (arg == "--json") {
             json = true;
@@ -166,6 +181,10 @@ int main(int argc, char** argv) {
                         "       code-insight --scan <file> [--json]        # 单文件扫描，不起服务\n"
                         "       code-insight --scan-dir <dir> [--json]     # 递归扫目录，汇总问题数\n");
             return 0;
+        } else {
+            std::fprintf(stderr, "error: 未知选项 \"%s\"\n", arg.c_str());
+            std::fprintf(stderr, "usage: code-insight [--port N] | --scan <file> | --scan-dir <dir> [--json]\n");
+            return 2;
         }
     }
 
