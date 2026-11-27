@@ -82,17 +82,39 @@ static int scanOneFile(const std::string& path, bool json) {
 
 // 目录批量扫描：CI 里真正的用法不是扫单个文件，而是扫整个仓。
 // 按扩展名过滤，递归走完，最后给一张"文件数 / 问题数"汇总表，退码=问题总数（封顶 125）。
+// 递归收集文件项。特意不用 recursive_directory_iterator 的 range-for：它的
+// increment 在子目录读不了（权限/被并发删除）时抛 filesystem_error，外面没 catch
+// 就直接 terminate，整棵树一个结果都出不来。这里全走 error_code 版，读不了的目录
+// 记一笔跳过，其余照扫。
+static void collectFiles(const std::filesystem::path& dir,
+                         std::vector<std::filesystem::directory_entry>& out, int& skippedDirs) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+    while (!ec && it != end) {
+        std::error_code isDirEc;
+        if (it->is_directory(isDirEc)) collectFiles(it->path(), out, skippedDirs);
+        else out.push_back(*it);
+        it.increment(ec);
+    }
+    if (ec) ++skippedDirs;
+}
+
 static int scanDir(const std::string& root, bool json) {
     namespace fs = std::filesystem;
-    if (!fs::exists(root) || !fs::is_directory(root)) {
-        std::fprintf(stderr, "error: %s 不是目录\n", root.c_str());
+    std::error_code rootEc;
+    if (!fs::is_directory(root, rootEc)) {
+        std::fprintf(stderr, "error: %s 不是目录%s%s\n", root.c_str(),
+                     rootEc ? "：" : "", rootEc ? rootEc.message().c_str() : "");
         return 2;
     }
     static const char* exts[] = {".c", ".cc", ".cpp", ".h", ".hpp", ".java", ".py", ".js", ".ts", ".go"};
-    int files = 0, critical = 0, warning = 0, lines = 0, skipped = 0;
+    int files = 0, critical = 0, warning = 0, lines = 0, skipped = 0, skippedDirs = 0;
     std::vector<std::pair<std::string, std::pair<int, int>>> perFile;  // 文件 -> (critical, warning)
+    std::vector<fs::directory_entry> entries;
+    collectFiles(root, entries, skippedDirs);
 
-    for (const auto& e : fs::recursive_directory_iterator(root)) {
+    for (const auto& e : entries) {
         if (!e.is_regular_file()) continue;
         std::string ext = e.path().extension().string();
         bool hit = false;
@@ -116,8 +138,9 @@ static int scanDir(const std::string& root, bool json) {
     }
 
     if (json) {
-        std::printf("{\"root\":\"%s\",\"files\":%d,\"lines\":%d,\"critical\":%d,\"warning\":%d,\"skipped\":%d,\"offenders\":[",
-                    jsonEscape(root).c_str(), files, lines, critical, warning, skipped);
+        std::printf("{\"root\":\"%s\",\"files\":%d,\"lines\":%d,\"critical\":%d,\"warning\":%d,\"skipped\":%d,"
+                    "\"skippedDirs\":%d,\"offenders\":[",
+                    jsonEscape(root).c_str(), files, lines, critical, warning, skipped, skippedDirs);
         for (size_t i = 0; i < perFile.size(); ++i)
             std::printf("%s{\"file\":\"%s\",\"critical\":%d,\"warning\":%d}", i ? "," : "",
                         jsonEscape(perFile[i].first).c_str(), perFile[i].second.first, perFile[i].second.second);
@@ -125,6 +148,7 @@ static int scanDir(const std::string& root, bool json) {
     } else {
         std::printf("扫描目录 %s\n", root.c_str());
         std::printf("  文件 %d 个，%d 行；跳过无法打开 %d 个\n", files, lines, skipped);
+        if (skippedDirs) std::printf("  另有 %d 个目录读不了，已跳过\n", skippedDirs);
         std::printf("  问题：critical %d / warning %d\n", critical, warning);
         if (!perFile.empty()) {
             std::printf("  有问题的文件：\n");
